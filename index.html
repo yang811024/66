@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>index</title>
+<style>
+    body {
+        margin: 0;
+        background: #222;
+        color: #fff;
+        text-align: center;
+        font-family: Arial;
+        touch-action: none;
+    }
+    canvas {
+        background: #000;
+        display: block;
+        margin: 8px auto;
+        border: 2px solid #fff;
+    }
+    button {
+        padding: 12px 24px;
+        margin: 6px;
+        font-size: 16px;
+    }
+</style>
+</head>
+<body>
+
+<h2>打磚塊</h2>
+
+<div id="menu">
+    <button onclick="startGame()">開始遊戲</button>
+    <button onclick="restartGame()">再來一局</button>
+    <button onclick="showHighScores()">查看高分</button>
+</div>
+
+<div id="highScorePanel" style="display:none;">
+    <h3>🏆 高分榜</h3>
+    <ol id="highScoreList"></ol>
+    <button onclick="backToMenu()">返回選單</button>
+</div>
+
+<canvas id="game"></canvas>
+<p id="info"></p>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+/* ---------- 自適應尺寸（直式） ---------- */
+function resizeCanvas() {
+    const maxWidth = 500;
+    const w = Math.min(window.innerWidth - 16, maxWidth);
+    canvas.width = w;
+    canvas.height = Math.floor(w * 1.4);
+}
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
+
+/* ---------- 遊戲狀態 ---------- */
+let score, lives, gameOver, ballLaunched, animationId;
+let level = 1;
+
+/* ---------- 平台 ---------- */
+const paddle = { width: 0, height: 12, x: 0, speed: 7 };
+
+/* ---------- 球 ---------- */
+const ball = { x: 0, y: 0, r: 8, dx: 0, dy: 0 };
+
+/* ---------- 反彈 ---------- */
+const maxBounceAngle = 60;
+const baseBallSpeed = 5;
+
+/* ---------- 磚塊 ---------- */
+const brickRow = 6, brickCol = 10;
+const brickPadding = 6, brickOffsetTop = 40;
+let brickWidth, brickHeight = 18;
+let bricks = [];
+
+/* ---------- 鍵盤 ---------- */
+let leftPressed = false, rightPressed = false;
+document.addEventListener("keydown", e => {
+    if (e.key === "ArrowLeft") leftPressed = true;
+    if (e.key === "ArrowRight") rightPressed = true;
+    if (e.key === " " && !ballLaunched && !gameOver) launchBall();
+});
+document.addEventListener("keyup", e => {
+    if (e.key === "ArrowLeft") leftPressed = false;
+    if (e.key === "ArrowRight") rightPressed = false;
+});
+
+/* ---------- 觸控 ---------- */
+canvas.addEventListener("touchmove", e => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const x = e.touches[0].clientX - rect.left;
+    paddle.x = Math.max(0, Math.min(canvas.width - paddle.width, x - paddle.width / 2));
+});
+canvas.addEventListener("touchstart", () => {
+    if (!ballLaunched && !gameOver) launchBall();
+});
+
+/* ---------- 全螢幕直式 ---------- */
+function requestFullscreenPortrait() {
+    const el = document.documentElement;
+    if (el.requestFullscreen) el.requestFullscreen();
+    if (screen.orientation?.lock) {
+        screen.orientation.lock("portrait").catch(()=>{});
+    }
+}
+
+/* ---------- 選單 ---------- */
+function startGame() {
+    requestFullscreenPortrait();
+    document.getElementById("menu").style.display = "none";
+    document.getElementById("highScorePanel").style.display = "none";
+    canvas.style.display = "block";
+    level = 1;
+    initGame();
+}
+function restartGame() {
+    cancelAnimationFrame(animationId);
+    startGame();
+}
+function backToMenu() {
+    document.getElementById("highScorePanel").style.display = "none";
+    document.getElementById("menu").style.display = "block";
+}
+function showHighScores() {
+    const list = document.getElementById("highScoreList");
+    list.innerHTML = "";
+    getHighScores().forEach(s => {
+        const li = document.createElement("li");
+        li.textContent = s;
+        list.appendChild(li);
+    });
+    document.getElementById("menu").style.display = "none";
+    document.getElementById("highScorePanel").style.display = "block";
+}
+
+/* ---------- 高分 ---------- */
+function saveHighScore(s) {
+    let scores = getHighScores();
+    scores.push(s);
+    scores.sort((a,b)=>b-a);
+    localStorage.setItem("brickHighScores", JSON.stringify(scores.slice(0,5)));
+}
+function getHighScores() {
+    return JSON.parse(localStorage.getItem("brickHighScores")) || [];
+}
+
+/* ---------- 初始化 ---------- */
+function initGame() {
+    score = 0;
+    lives = 3;
+    gameOver = false;
+
+    paddle.width = canvas.width * 0.22;
+    paddle.x = canvas.width / 2 - paddle.width / 2;
+    brickWidth = (canvas.width - (brickCol + 1) * brickPadding) / brickCol;
+
+    createBricks();
+    resetBall();
+    draw();
+}
+
+/* ---------- 建立磚塊（依關卡） ---------- */
+function createBricks() {
+    bricks = [];
+    const hp = level === 1 ? 1 : 2;
+
+    for (let r = 0; r < brickRow; r++) {
+        bricks[r] = [];
+        for (let c = 0; c < brickCol; c++) {
+            bricks[r][c] = { x: 0, y: 0, hp };
+        }
+    }
+}
+
+/* ---------- 球 ---------- */
+function getBallSpeed() {
+    return baseBallSpeed + Math.floor(score / 5);
+}
+function launchBall() {
+    const speed = getBallSpeed();
+    ball.dx = 0;
+    ball.dy = -speed;
+    ballLaunched = true;
+}
+function resetBall() {
+    ballLaunched = false;
+    ball.x = paddle.x + paddle.width / 2;
+    ball.y = canvas.height - paddle.height - 10 - ball.r;
+    ball.dx = 0;
+    ball.dy = 0;
+}
+
+/* ---------- 碰撞 ---------- */
+function collisionDetection() {
+    let remaining = 0;
+
+    for (let r = 0; r < brickRow; r++) {
+        for (let c = 0; c < brickCol; c++) {
+            const b = bricks[r][c];
+            if (b.hp > 0) {
+                remaining++;
+                if (
+                    ball.x > b.x && ball.x < b.x + brickWidth &&
+                    ball.y > b.y && ball.y < b.y + brickHeight
+                ) {
+                    ball.dy *= -1;
+                    b.hp--;
+                    if (b.hp === 0) score++;
+                }
+            }
+        }
+    }
+
+    if (remaining === 0) nextLevel();
+}
+
+/* ---------- 下一關 ---------- */
+function nextLevel() {
+    level++;
+    paddle.x = canvas.width / 2 - paddle.width / 2;
+    createBricks();
+    resetBall();
+}
+
+/* ---------- 繪圖 ---------- */
+function drawBall() {
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2);
+    ctx.fillStyle="#00ffcc";
+    ctx.fill();
+}
+function drawPaddle() {
+    ctx.fillStyle="#fff";
+    ctx.fillRect(paddle.x, canvas.height - paddle.height - 10, paddle.width, paddle.height);
+}
+function drawBricks() {
+    for (let r=0;r<brickRow;r++){
+        for(let c=0;c<brickCol;c++){
+            const b = bricks[r][c];
+            if (b.hp > 0) {
+                const x = brickPadding + c*(brickWidth+brickPadding);
+                const y = brickOffsetTop + r*(brickHeight+brickPadding);
+                b.x = x; b.y = y;
+                ctx.fillStyle = b.hp === 2 ? "#cc6600" : "#ff9933";
+                ctx.fillRect(x,y,brickWidth,brickHeight);
+            }
+        }
+    }
+}
+
+/* ---------- 主迴圈 ---------- */
+function draw() {
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    drawBricks();
+    drawBall();
+    drawPaddle();
+    collisionDetection();
+
+    if(ball.x+ball.dx>canvas.width-ball.r||ball.x+ball.dx<ball.r) ball.dx*=-1;
+    if(ball.y+ball.dy<ball.r) ball.dy*=-1;
+
+    if(ball.y+ball.dy>canvas.height-ball.r){
+        lives--;
+        if(lives===0){
+            saveHighScore(score);
+            document.getElementById("info").innerText =
+                `遊戲結束｜關卡 ${level}｜得分 ${score}`;
+            canvas.style.display="none";
+            document.getElementById("menu").style.display="block";
+            return;
+        }
+        resetBall();
+    }
+
+    if(
+        ball.y+ball.r>canvas.height-paddle.height-10 &&
+        ball.x>paddle.x && ball.x<paddle.x+paddle.width &&
+        ball.dy>0
+    ){
+        let hit=(ball.x-(paddle.x+paddle.width/2))/(paddle.width/2);
+        hit=Math.max(-1,Math.min(1,hit));
+        let angle=Math.round(hit*maxBounceAngle/5)*5;
+        let speed=getBallSpeed();
+        let rad=angle*Math.PI/180;
+        ball.dx=speed*Math.sin(rad);
+        ball.dy=-speed*Math.cos(rad);
+        ball.y=canvas.height-paddle.height-10-ball.r;
+    }
+
+    if(leftPressed && paddle.x>0) paddle.x-=paddle.speed;
+    if(rightPressed && paddle.x+paddle.width<canvas.width) paddle.x+=paddle.speed;
+
+    if(!ballLaunched){
+        ball.x=paddle.x+paddle.width/2;
+        ball.y=canvas.height-paddle.height-10-ball.r;
+    }else{
+        ball.x+=ball.dx;
+        ball.y+=ball.dy;
+    }
+
+    document.getElementById("info").innerText =
+        `關卡：${level} ｜ 分數：${score} ｜ 剩餘球數：${lives}`;
+
+    animationId=requestAnimationFrame(draw);
+}
+</script>
+</body>
+</html>
