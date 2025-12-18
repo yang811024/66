@@ -3,27 +3,27 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>index</title>
+<title>打磚塊</title>
 <style>
-    body {
-        margin: 0;
-        background: #222;
-        color: #fff;
-        text-align: center;
-        font-family: Arial;
-        touch-action: none;
-    }
-    canvas {
-        background: #000;
-        display: block;
-        margin: 8px auto;
-        border: 2px solid #fff;
-    }
-    button {
-        padding: 12px 24px;
-        margin: 6px;
-        font-size: 16px;
-    }
+body {
+    margin: 0;
+    background: #222;
+    color: #fff;
+    text-align: center;
+    font-family: Arial;
+    touch-action: none;
+}
+canvas {
+    background: #000;
+    display: block;
+    margin: 8px auto;
+    border: 2px solid #fff;
+}
+button {
+    padding: 12px 24px;
+    margin: 6px;
+    font-size: 16px;
+}
 </style>
 </head>
 <body>
@@ -49,7 +49,7 @@
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 
-/* ---------- 自適應尺寸（直式） ---------- */
+/* ---------- 自適應 ---------- */
 function resizeCanvas() {
     const maxWidth = 500;
     const w = Math.min(window.innerWidth - 16, maxWidth);
@@ -59,17 +59,22 @@ function resizeCanvas() {
 resizeCanvas();
 window.addEventListener("resize", resizeCanvas);
 
-/* ---------- 遊戲狀態 ---------- */
+/* ---------- 狀態 ---------- */
 let score, lives, gameOver, ballLaunched, animationId;
 let level = 1;
 
 /* ---------- 平台 ---------- */
 const paddle = { width: 0, height: 12, x: 0, speed: 7 };
 
-/* ---------- 球 ---------- */
-const ball = { x: 0, y: 0, r: 8, dx: 0, dy: 0 };
+/* ---------- 球（含上一幀位置） ---------- */
+const ball = {
+    x: 0, y: 0,
+    prevX: 0, prevY: 0,
+    r: 8,
+    dx: 0, dy: 0
+};
 
-/* ---------- 反彈 ---------- */
+/* ---------- 物理 ---------- */
 const maxBounceAngle = 60;
 const baseBallSpeed = 5;
 
@@ -79,7 +84,12 @@ const brickPadding = 6, brickOffsetTop = 40;
 let brickWidth, brickHeight = 18;
 let bricks = [];
 
-/* ---------- 鍵盤 ---------- */
+/* ---------- 工具 ---------- */
+function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
+}
+
+/* ---------- 輸入 ---------- */
 let leftPressed = false, rightPressed = false;
 document.addEventListener("keydown", e => {
     if (e.key === "ArrowLeft") leftPressed = true;
@@ -90,30 +100,18 @@ document.addEventListener("keyup", e => {
     if (e.key === "ArrowLeft") leftPressed = false;
     if (e.key === "ArrowRight") rightPressed = false;
 });
-
-/* ---------- 觸控 ---------- */
 canvas.addEventListener("touchmove", e => {
     e.preventDefault();
     const rect = canvas.getBoundingClientRect();
     const x = e.touches[0].clientX - rect.left;
-    paddle.x = Math.max(0, Math.min(canvas.width - paddle.width, x - paddle.width / 2));
+    paddle.x = clamp(x - paddle.width / 2, 0, canvas.width - paddle.width);
 });
 canvas.addEventListener("touchstart", () => {
     if (!ballLaunched && !gameOver) launchBall();
 });
 
-/* ---------- 全螢幕直式 ---------- */
-function requestFullscreenPortrait() {
-    const el = document.documentElement;
-    if (el.requestFullscreen) el.requestFullscreen();
-    if (screen.orientation?.lock) {
-        screen.orientation.lock("portrait").catch(()=>{});
-    }
-}
-
 /* ---------- 選單 ---------- */
 function startGame() {
-    requestFullscreenPortrait();
     document.getElementById("menu").style.display = "none";
     document.getElementById("highScorePanel").style.display = "none";
     canvas.style.display = "block";
@@ -166,11 +164,10 @@ function initGame() {
     draw();
 }
 
-/* ---------- 建立磚塊（依關卡） ---------- */
+/* ---------- 磚塊 ---------- */
 function createBricks() {
     bricks = [];
     const hp = level === 1 ? 1 : 2;
-
     for (let r = 0; r < brickRow; r++) {
         bricks[r] = [];
         for (let c = 0; c < brickCol; c++) {
@@ -197,34 +194,38 @@ function resetBall() {
     ball.dy = 0;
 }
 
-/* ---------- 碰撞 ---------- */
+/* ---------- 磚塊貼合碰撞 ---------- */
 function collisionDetection() {
     let remaining = 0;
 
     for (let r = 0; r < brickRow; r++) {
         for (let c = 0; c < brickCol; c++) {
             const b = bricks[r][c];
-            if (b.hp > 0) {
-                remaining++;
-                if (
-                    ball.x > b.x && ball.x < b.x + brickWidth &&
-                    ball.y > b.y && ball.y < b.y + brickHeight
-                ) {
-                    ball.dy *= -1;
-                    b.hp--;
-                    if (b.hp === 0) score++;
-                }
+            if (b.hp <= 0) continue;
+
+            remaining++;
+
+            const closestX = clamp(ball.x, b.x, b.x + brickWidth);
+            const closestY = clamp(ball.y, b.y, b.y + brickHeight);
+
+            const dx = ball.x - closestX;
+            const dy = ball.y - closestY;
+
+            if (dx * dx + dy * dy < ball.r * ball.r) {
+                if (Math.abs(dx) > Math.abs(dy)) ball.dx *= -1;
+                else ball.dy *= -1;
+
+                b.hp--;
+                if (b.hp === 0) score++;
             }
         }
     }
-
     if (remaining === 0) nextLevel();
 }
 
 /* ---------- 下一關 ---------- */
 function nextLevel() {
     level++;
-    paddle.x = canvas.width / 2 - paddle.width / 2;
     createBricks();
     resetBall();
 }
@@ -232,24 +233,24 @@ function nextLevel() {
 /* ---------- 繪圖 ---------- */
 function drawBall() {
     ctx.beginPath();
-    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI*2);
-    ctx.fillStyle="#00ffcc";
+    ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+    ctx.fillStyle = "#00ffcc";
     ctx.fill();
 }
 function drawPaddle() {
-    ctx.fillStyle="#fff";
+    ctx.fillStyle = "#fff";
     ctx.fillRect(paddle.x, canvas.height - paddle.height - 10, paddle.width, paddle.height);
 }
 function drawBricks() {
-    for (let r=0;r<brickRow;r++){
-        for(let c=0;c<brickCol;c++){
+    for (let r = 0; r < brickRow; r++) {
+        for (let c = 0; c < brickCol; c++) {
             const b = bricks[r][c];
             if (b.hp > 0) {
-                const x = brickPadding + c*(brickWidth+brickPadding);
-                const y = brickOffsetTop + r*(brickHeight+brickPadding);
+                const x = brickPadding + c * (brickWidth + brickPadding);
+                const y = brickOffsetTop + r * (brickHeight + brickPadding);
                 b.x = x; b.y = y;
                 ctx.fillStyle = b.hp === 2 ? "#cc6600" : "#ff9933";
-                ctx.fillRect(x,y,brickWidth,brickHeight);
+                ctx.fillRect(x, y, brickWidth, brickHeight);
             }
         }
     }
@@ -257,59 +258,68 @@ function drawBricks() {
 
 /* ---------- 主迴圈 ---------- */
 function draw() {
-    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     drawBricks();
     drawBall();
     drawPaddle();
+
     collisionDetection();
 
-    if(ball.x+ball.dx>canvas.width-ball.r||ball.x+ball.dx<ball.r) ball.dx*=-1;
-    if(ball.y+ball.dy<ball.r) ball.dy*=-1;
+    if (ball.x + ball.dx > canvas.width - ball.r || ball.x + ball.dx < ball.r) ball.dx *= -1;
+    if (ball.y + ball.dy < ball.r) ball.dy *= -1;
 
-    if(ball.y+ball.dy>canvas.height-ball.r){
+    const paddleTop = canvas.height - paddle.height - 10;
+
+    /* 高速平台穿越判定 */
+    if (
+        ball.dy > 0 &&
+        ball.prevY + ball.r <= paddleTop &&
+        ball.y + ball.r >= paddleTop &&
+        ball.x >= paddle.x &&
+        ball.x <= paddle.x + paddle.width
+    ) {
+        let hit = (ball.x - (paddle.x + paddle.width / 2)) / (paddle.width / 2);
+        hit = clamp(hit, -1, 1);
+
+        let angle = Math.round(hit * maxBounceAngle / 5) * 5;
+        let speed = getBallSpeed();
+        let rad = angle * Math.PI / 180;
+
+        ball.dx = speed * Math.sin(rad);
+        ball.dy = -speed * Math.cos(rad);
+        ball.y = paddleTop - ball.r;
+    }
+
+    if (ball.y > canvas.height) {
         lives--;
-        if(lives===0){
+        if (lives === 0) {
             saveHighScore(score);
-            document.getElementById("info").innerText =
-                `遊戲結束｜關卡 ${level}｜得分 ${score}`;
-            canvas.style.display="none";
-            document.getElementById("menu").style.display="block";
+            canvas.style.display = "none";
+            document.getElementById("menu").style.display = "block";
             return;
         }
         resetBall();
     }
 
-    if(
-        ball.y+ball.r>canvas.height-paddle.height-10 &&
-        ball.x>paddle.x && ball.x<paddle.x+paddle.width &&
-        ball.dy>0
-    ){
-        let hit=(ball.x-(paddle.x+paddle.width/2))/(paddle.width/2);
-        hit=Math.max(-1,Math.min(1,hit));
-        let angle=Math.round(hit*maxBounceAngle/5)*5;
-        let speed=getBallSpeed();
-        let rad=angle*Math.PI/180;
-        ball.dx=speed*Math.sin(rad);
-        ball.dy=-speed*Math.cos(rad);
-        ball.y=canvas.height-paddle.height-10-ball.r;
-    }
+    if (leftPressed) paddle.x -= paddle.speed;
+    if (rightPressed) paddle.x += paddle.speed;
+    paddle.x = clamp(paddle.x, 0, canvas.width - paddle.width);
 
-    if(leftPressed && paddle.x>0) paddle.x-=paddle.speed;
-    if(rightPressed && paddle.x+paddle.width<canvas.width) paddle.x+=paddle.speed;
-
-    if(!ballLaunched){
-        ball.x=paddle.x+paddle.width/2;
-        ball.y=canvas.height-paddle.height-10-ball.r;
-    }else{
-        ball.x+=ball.dx;
-        ball.y+=ball.dy;
+    if (!ballLaunched) {
+        ball.x = paddle.x + paddle.width / 2;
+        ball.y = paddleTop - ball.r;
+    } else {
+        ball.prevX = ball.x;
+        ball.prevY = ball.y;
+        ball.x += ball.dx;
+        ball.y += ball.dy;
     }
 
     document.getElementById("info").innerText =
-        `關卡：${level} ｜ 分數：${score} ｜ 剩餘球數：${lives}`;
+        `關卡 ${level} ｜ 分數 ${score} ｜ 剩餘球數 ${lives}`;
 
-    animationId=requestAnimationFrame(draw);
+    animationId = requestAnimationFrame(draw);
 }
 </script>
 </body>
